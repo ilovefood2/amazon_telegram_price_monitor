@@ -13,6 +13,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "300"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -22,6 +24,7 @@ STATE_FILE = os.getenv("STATE_FILE", "/data/state.json")
 PRODUCTS_FILE = os.getenv("PRODUCTS_FILE", "/app/products.json")
 CASHBACK_FILE = os.getenv("CASHBACK_FILE", "/app/cashback.json")
 PAGE_LOAD_WAIT_SECONDS = int(os.getenv("PAGE_LOAD_WAIT_SECONDS", "4"))
+ELEMENT_WAIT_SECONDS = int(os.getenv("ELEMENT_WAIT_SECONDS", "12"))
 
 CHROME_BINARY = (
     os.getenv("CHROME_BINARY")
@@ -75,6 +78,43 @@ def product_key(url, explicit_id=None):
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
 
 
+def infer_product_parser(url, configured_parser):
+    configured_parser = (configured_parser or "auto").strip().lower()
+    if configured_parser not in {"auto", "amazon", "generic"}:
+        raise ValueError("parser must be one of: auto, amazon, generic")
+
+    if configured_parser != "auto":
+        return configured_parser
+
+    host = (urlparse(url).hostname or "").lower()
+    if host == "amazon.ca" or host.endswith(".amazon.ca"):
+        return "amazon"
+
+    return "generic"
+
+
+def normalize_selectors(item):
+    selectors = []
+
+    single = item.get("price_selector")
+    if single:
+        selectors.append(str(single).strip())
+
+    multiple = item.get("price_selectors")
+    if multiple is not None:
+        if not isinstance(multiple, list):
+            raise ValueError("price_selectors must be a JSON array.")
+        selectors.extend(
+            str(value).strip()
+            for value in multiple
+            if str(value).strip()
+        )
+
+    return list(
+        dict.fromkeys(selector for selector in selectors if selector)
+    )
+
+
 def load_products():
     with open(PRODUCTS_FILE, "r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -112,23 +152,60 @@ def load_products():
             )
 
         if target_price <= 0:
-            raise ValueError(f"Product #{index} target_price must be greater than 0.")
+            raise ValueError(
+                f"Product #{index} target_price must be greater than 0."
+            )
 
         try:
             repeat_alert_hours = int(
                 item.get("repeat_alert_hours", DEFAULT_REPEAT_ALERT_HOURS)
             )
         except (TypeError, ValueError):
-            raise ValueError(f"Product #{index} has an invalid 'repeat_alert_hours'.")
+            raise ValueError(
+                f"Product #{index} has an invalid 'repeat_alert_hours'."
+            )
 
         if repeat_alert_hours < 0:
-            raise ValueError(f"Product #{index} repeat_alert_hours cannot be negative.")
+            raise ValueError(
+                f"Product #{index} repeat_alert_hours cannot be negative."
+            )
 
         key = product_key(url, item.get("id"))
         if not key:
             raise ValueError(f"Product #{index} has an empty id.")
         if key in seen_keys:
-            raise ValueError(f"Duplicate product id/key '{key}' in products.json.")
+            raise ValueError(
+                f"Duplicate product id/key '{key}' in products.json."
+            )
+
+        parser = infer_product_parser(
+            url,
+            item.get("parser", "auto"),
+        )
+
+        price_attribute = str(
+            item.get("price_attribute", "text")
+        ).strip() or "text"
+
+        price_regex = item.get("price_regex")
+        if price_regex is not None:
+            price_regex = str(price_regex)
+            try:
+                re.compile(price_regex)
+            except re.error as exc:
+                raise ValueError(
+                    f"Product #{index} has invalid price_regex: {exc}"
+                ) from exc
+
+        wait_selector = (
+            str(item.get("wait_selector", "")).strip() or None
+        )
+        title_selector = (
+            str(item.get("title_selector", "")).strip() or None
+        )
+        title_attribute = (
+            str(item.get("title_attribute", "text")).strip() or "text"
+        )
 
         seen_keys.add(key)
         products.append(
@@ -138,6 +215,17 @@ def load_products():
                 "url": url,
                 "target_price": target_price,
                 "repeat_alert_hours": repeat_alert_hours,
+                "parser": parser,
+                "price_selectors": normalize_selectors(item),
+                "price_attribute": price_attribute,
+                "price_regex": price_regex,
+                "wait_selector": wait_selector,
+                "title_selector": title_selector,
+                "title_attribute": title_attribute,
+                "currency": (
+                    str(item.get("currency", "CAD")).strip().upper()
+                    or "CAD"
+                ),
             }
         )
 
@@ -266,37 +354,233 @@ def build_driver():
     return webdriver.Chrome(service=service, options=options)
 
 
-def parse_money(text):
+def read_element_value(element, attribute):
+    attribute = (attribute or "text").strip()
+
+    if attribute.lower() in {"text", "textcontent"}:
+        return (
+            element.get_attribute("textContent")
+            or element.text
+            or ""
+        ).strip()
+
+    return (element.get_attribute(attribute) or "").strip()
+
+
+def parse_money(text, price_regex=None):
+    if text is None:
+        return None
+
+    text = str(text).replace(",", "").replace("\\xa0", " ").strip()
     if not text:
         return None
 
-    text = text.replace(",", "").replace("\xa0", " ")
-    match = re.search(r"(?:C\$|\$)\s*([0-9]+(?:\.[0-9]{1,2})?)", text)
-    if match:
-        return float(match.group(1))
+    if price_regex:
+        match = re.search(price_regex, text)
+        if not match:
+            return None
+        text = match.group(1) if match.lastindex else match.group(0)
 
-    match = re.search(r"\b([0-9]+(?:\.[0-9]{1,2})?)\b", text)
+    match = re.search(
+        r"(?:CAD|CDN|C\\$|\\$)?\\s*([0-9]+(?:\\.[0-9]{1,2})?)",
+        text,
+        re.I,
+    )
     if match:
         return float(match.group(1))
 
     return None
 
 
-def get_product_price(driver, product):
+def get_page_title(driver, product):
+    if product.get("title_selector"):
+        elements = driver.find_elements(
+            By.CSS_SELECTOR,
+            product["title_selector"],
+        )
+        for element in elements:
+            value = read_element_value(
+                element,
+                product.get("title_attribute", "text"),
+            )
+            if value:
+                return value
+
+    if product.get("name"):
+        return product["name"]
+
+    for selector, attribute in [
+        ("meta[property='og:title']", "content"),
+        ("meta[name='twitter:title']", "content"),
+    ]:
+        try:
+            for element in driver.find_elements(
+                By.CSS_SELECTOR,
+                selector,
+            ):
+                value = read_element_value(element, attribute)
+                if value:
+                    return value
+        except Exception:
+            pass
+
+    return (driver.title or "Product").strip() or "Product"
+
+
+def wait_for_product_page(driver, product):
     driver.get(product["url"])
+
+    if product.get("wait_selector"):
+        WebDriverWait(driver, ELEMENT_WAIT_SECONDS).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, product["wait_selector"])
+            )
+        )
+
     time.sleep(PAGE_LOAD_WAIT_SECONDS)
 
-    title = product["name"] or "Amazon product"
-    try:
-        title_text = driver.find_element(By.ID, "productTitle").text.strip()
-        if title_text:
-            title = title_text
-    except Exception:
-        pass
 
+def extract_from_configured_selectors(driver, product):
+    selectors = product.get("price_selectors") or []
+
+    for selector in selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Invalid CSS selector '{selector}': {exc}"
+            ) from exc
+
+        for element in elements:
+            raw = read_element_value(
+                element,
+                product.get("price_attribute", "text"),
+            )
+            price = parse_money(
+                raw,
+                product.get("price_regex"),
+            )
+            if price is not None and 0.01 <= price <= 1000000:
+                return (
+                    price,
+                    f"configured selector {selector}",
+                    raw,
+                )
+
+    return None
+
+
+def iter_json_objects(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from iter_json_objects(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from iter_json_objects(child)
+
+
+def jsonld_types(obj):
+    value = obj.get("@type")
+    if isinstance(value, str):
+        return {value.lower()}
+    if isinstance(value, list):
+        return {str(item).lower() for item in value}
+    return set()
+
+
+def price_from_offer(offer):
+    if not isinstance(offer, dict):
+        return None
+
+    for field in ("price", "lowPrice"):
+        if field in offer:
+            price = parse_money(offer.get(field))
+            if price is not None:
+                return price
+
+    return None
+
+
+def extract_jsonld_product_price(driver):
+    scripts = driver.find_elements(
+        By.CSS_SELECTOR,
+        "script[type='application/ld+json']",
+    )
+
+    for script in scripts:
+        raw = script.get_attribute("textContent") or ""
+        if not raw.strip():
+            continue
+
+        try:
+            data = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+
+        for obj in iter_json_objects(data):
+            if "product" not in jsonld_types(obj):
+                continue
+
+            offers = obj.get("offers")
+            if isinstance(offers, list):
+                for offer in offers:
+                    price = price_from_offer(offer)
+                    if price is not None:
+                        return (
+                            price,
+                            "JSON-LD Product offers",
+                            json.dumps(offer),
+                        )
+            else:
+                price = price_from_offer(offers)
+                if price is not None:
+                    return (
+                        price,
+                        "JSON-LD Product offers",
+                        json.dumps(offers),
+                    )
+
+    return None
+
+
+def extract_standard_product_metadata(driver):
+    selectors = [
+        ("meta[property='product:price:amount']", "content"),
+        ("meta[property='og:price:amount']", "content"),
+        ("meta[itemprop='price']", "content"),
+        ("[itemprop='price']", "content"),
+        ("[itemprop='price']", "value"),
+        ("[itemprop='price']", "text"),
+    ]
+
+    for selector, attribute in selectors:
+        try:
+            elements = driver.find_elements(
+                By.CSS_SELECTOR,
+                selector,
+            )
+        except Exception:
+            continue
+
+        for element in elements:
+            raw = read_element_value(element, attribute)
+            price = parse_money(raw)
+            if price is not None and 0.01 <= price <= 1000000:
+                return (
+                    price,
+                    f"structured metadata {selector}",
+                    raw,
+                )
+
+    return None
+
+
+def extract_amazon_price(driver):
     selectors = [
         "#corePrice_feature_div .a-price .a-offscreen",
-        "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
+        "#corePriceDisplay_desktop_feature_div "
+        ".a-price .a-offscreen",
         "#price_inside_buybox",
         "#priceblock_ourprice",
         "#priceblock_dealprice",
@@ -306,48 +590,89 @@ def get_product_price(driver, product):
 
     for selector in selectors:
         try:
-            for element in driver.find_elements(By.CSS_SELECTOR, selector):
-                raw = (
-                    element.get_attribute("textContent")
-                    or element.text
-                    or ""
-                ).strip()
+            for element in driver.find_elements(
+                By.CSS_SELECTOR,
+                selector,
+            ):
+                raw = read_element_value(element, "text")
                 price = parse_money(raw)
-                if price is not None and 0.01 <= price <= 100000:
-                    log.info(
-                        "[%s] Price candidate %.2f from %s (%s)",
-                        product["key"],
+                if price is not None and 0.01 <= price <= 1000000:
+                    return (
                         price,
-                        selector,
+                        f"Amazon selector {selector}",
                         raw,
                     )
-                    return title, price
         except Exception:
             continue
 
-    body = driver.find_element(By.TAG_NAME, "body").text
-    for raw in re.findall(
-        r"(?:C\$|\$)\s*[0-9]{1,6}(?:\.[0-9]{2})?",
-        body,
-    ):
-        price = parse_money(raw)
-        if price is not None and 0.01 <= price <= 100000:
+    return None
+
+
+def get_product_price(driver, product):
+    wait_for_product_page(driver, product)
+    title = get_page_title(driver, product)
+
+    result = extract_from_configured_selectors(driver, product)
+    if result:
+        price, source, raw = result
+        log.info(
+            "[%s] Price candidate %.2f from %s (%s)",
+            product["key"],
+            price,
+            source,
+            raw,
+        )
+        return title, price
+
+    if product["parser"] == "amazon":
+        result = extract_amazon_price(driver)
+        if result:
+            price, source, raw = result
             log.info(
-                "[%s] Fallback price candidate %.2f (%s)",
+                "[%s] Price candidate %.2f from %s (%s)",
                 product["key"],
                 price,
+                source,
                 raw,
             )
             return title, price
 
-    source = driver.page_source.lower()
-    if (
-        "enter the characters you see below" in source
-        or "sorry, we just need to make sure" in source
+    for extractor in (
+        extract_jsonld_product_price,
+        extract_standard_product_metadata,
     ):
-        raise RuntimeError("Amazon returned a bot/challenge page.")
+        result = extractor(driver)
+        if result:
+            price, source, raw = result
+            log.info(
+                "[%s] Price candidate %.2f from %s (%s)",
+                product["key"],
+                price,
+                source,
+                raw,
+            )
+            return title, price
 
-    raise RuntimeError("Could not find a product price on the page.")
+    if product["parser"] == "amazon":
+        source = driver.page_source.lower()
+        if (
+            "enter the characters you see below" in source
+            or "sorry, we just need to make sure" in source
+        ):
+            raise RuntimeError(
+                "Amazon returned a bot/challenge page."
+            )
+
+    if product.get("price_selectors"):
+        raise RuntimeError(
+            "Configured price selector(s) did not produce a valid price."
+        )
+
+    raise RuntimeError(
+        "Could not determine this product's price safely. "
+        "Add 'price_selector' (and, if needed, 'price_attribute' "
+        "or 'price_regex') to this item in products.json."
+    )
 
 
 def parse_cashback_percent(text):
@@ -508,6 +833,14 @@ def should_alert_cashback(
     return True
 
 
+def format_price(price, currency):
+    if currency == "CAD":
+        return "C$" + f"{price:.2f}"
+    if currency == "USD":
+        return "US$" + f"{price:.2f}"
+    return f"{currency} {price:.2f}"
+
+
 def run():
     log.info(
         "Shopping deal monitor started; interval=%ss; products=%s; cashback=%s",
@@ -542,17 +875,22 @@ def run():
 
             if signature != last_config_signature:
                 log.info(
-                    "Loaded %d Amazon product(s) and %d cashback monitor(s)",
+                    "Loaded %d product(s) and %d cashback monitor(s)",
                     len(products),
                     len(cashback_monitors),
                 )
 
                 for product in products:
                     log.info(
-                        "Watching Amazon [%s] %s | target C$%.2f | %s",
+                        "Watching product [%s] %s | parser=%s | "
+                        "target %s | %s",
                         product["key"],
                         product["name"] or "(title from page)",
-                        product["target_price"],
+                        product["parser"],
+                        format_price(
+                            product["target_price"],
+                            product["currency"],
+                        ),
                         product["url"],
                     )
 
@@ -586,11 +924,20 @@ def run():
                     title, price = get_product_price(driver, product)
                     now = datetime.now(timezone.utc).isoformat()
 
-                    log.info(
-                        "[%s] Current price: C$%.2f (target C$%.2f)",
-                        product["key"],
+                    current_label = format_price(
                         price,
+                        product["currency"],
+                    )
+                    target_label = format_price(
                         product["target_price"],
+                        product["currency"],
+                    )
+
+                    log.info(
+                        "[%s] Current price: %s (target %s)",
+                        product["key"],
+                        current_label,
+                        target_label,
                     )
 
                     alert = should_alert(
@@ -607,6 +954,8 @@ def run():
                             "last_title": title,
                             "url": product["url"],
                             "target_price": product["target_price"],
+                            "currency": product["currency"],
+                            "parser": product["parser"],
                             "below_target": (
                                 price <= product["target_price"]
                             ),
@@ -615,10 +964,10 @@ def run():
 
                     if alert:
                         message = (
-                            "🔥 Amazon Price Alert\n\n"
+                            "🔥 Product Price Alert\n\n"
                             f"{title}\n"
-                            f"Price: C${price:.2f}\n"
-                            f"Target: C${product['target_price']:.2f} "
+                            f"Price: {current_label}\n"
+                            f"Target: {target_label} "
                             "or less\n\n"
                             f"{product['url']}"
                         )
@@ -639,7 +988,7 @@ def run():
                     item_state["last_error"] = str(exc)
                     save_state(state)
                     log.exception(
-                        "[%s] Amazon check failed: %s",
+                        "[%s] Product check failed: %s",
                         product["key"],
                         exc,
                     )

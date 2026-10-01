@@ -2,20 +2,162 @@
 
 Dockerized Raspberry Pi / ARM64 monitor for:
 
-- Amazon.ca product prices
+- product prices on Amazon.ca and other shopping websites
 - Rakuten.ca Cash Back rates
 
 Telegram alerts are sent only when a configured threshold is triggered.
 
-## Current monitors
+## Generic product monitoring
 
-### Amazon
+`products.json` is now site-independent.
 
-`products.json` contains Amazon product price rules.
+The monitor uses this order:
 
-### Rakuten
+1. An explicit CSS selector from `price_selector` / `price_selectors`, if configured.
+2. Amazon-specific selectors when `parser` is `amazon`.
+3. Standard Product/Offer JSON-LD.
+4. Standard product price metadata such as `product:price:amount` and `itemprop=price`.
 
-`cashback.json` currently watches Sporting Life:
+It intentionally does **not** scan the entire page for the first dollar amount. If a site does not expose safe structured price data, add a CSS selector for the exact price element.
+
+### Amazon example
+
+```json
+{
+  "id": "finer-form-bench",
+  "name": "Finer Form Multi-Functional Weight Bench",
+  "parser": "amazon",
+  "url": "https://www.amazon.ca/dp/B08YWHN79N",
+  "target_price": 229,
+  "currency": "CAD",
+  "repeat_alert_hours": 24
+}
+```
+
+`parser: "auto"` is the default. It automatically recognizes Amazon.ca URLs as Amazon and treats other domains as generic.
+
+### Generic site — automatic structured-data detection
+
+Many Shopify and modern commerce sites expose JSON-LD or product metadata, so this can be enough:
+
+```json
+{
+  "id": "my-shoes",
+  "name": "Running Shoes",
+  "parser": "generic",
+  "url": "https://example.com/products/running-shoes",
+  "target_price": 149.99,
+  "currency": "CAD"
+}
+```
+
+### Generic site — explicit CSS price selector
+
+If automatic detection cannot safely find the price:
+
+```json
+{
+  "id": "my-jacket",
+  "name": "Winter Jacket",
+  "parser": "generic",
+  "url": "https://example.com/products/winter-jacket",
+  "target_price": 199.99,
+  "currency": "CAD",
+  "price_selector": ".product-price"
+}
+```
+
+The default `price_attribute` is `text`.
+
+If the price is stored in a meta tag or HTML attribute:
+
+```json
+{
+  "id": "meta-price-item",
+  "name": "Example Item",
+  "parser": "generic",
+  "url": "https://example.com/product/123",
+  "target_price": 99.99,
+  "price_selector": "meta[property='product:price:amount']",
+  "price_attribute": "content"
+}
+```
+
+You can supply several candidate selectors:
+
+```json
+{
+  "id": "multi-selector-item",
+  "name": "Example Item",
+  "url": "https://example.com/product/456",
+  "target_price": 79.99,
+  "price_selectors": [
+    ".sale-price",
+    ".current-price",
+    "[itemprop='price']"
+  ]
+}
+```
+
+### JavaScript-heavy pages
+
+If the page renders its price after initial page load, use `wait_selector`:
+
+```json
+{
+  "id": "dynamic-item",
+  "name": "Dynamic Product",
+  "url": "https://example.com/dynamic-product",
+  "target_price": 129.99,
+  "price_selector": "[data-testid='price']",
+  "wait_selector": "[data-testid='price']"
+}
+```
+
+The maximum wait is controlled by `ELEMENT_WAIT_SECONDS` in `.env`.
+
+### Price regex
+
+If the selected element contains several values, `price_regex` can isolate the real price. Capture group 1 is used when present.
+
+```json
+{
+  "id": "regex-item",
+  "name": "Example Item",
+  "url": "https://example.com/item",
+  "target_price": 100,
+  "price_selector": ".pricing-box",
+  "price_regex": "Now\\s*\\$([0-9]+(?:\\.[0-9]{2})?)"
+}
+```
+
+## Product configuration fields
+
+- `id` — optional stable state key; recommended.
+- `name` — optional display name.
+- `url` — required product URL.
+- `target_price` — required alert price.
+- `currency` — defaults to `CAD`; `USD` is also formatted specially.
+- `parser` — `auto` (default), `amazon`, or `generic`.
+- `price_selector` — optional CSS selector for the price node.
+- `price_selectors` — optional ordered list of CSS selectors.
+- `price_attribute` — defaults to `text`; can be `content`, `value`, etc.
+- `price_regex` — optional regex to extract the price from the selected value.
+- `wait_selector` — optional CSS selector to wait for before parsing.
+- `title_selector` — optional CSS selector for the product title.
+- `title_attribute` — defaults to `text`.
+- `repeat_alert_hours` — repeat interval while still at/below target; `0` disables reminders.
+- `enabled` — set to `false` to temporarily disable the item.
+
+## Live product configuration
+
+`products.json` is bind-mounted into the container. You can add, remove, or edit products while the monitor is running. Changes are loaded on the next check cycle without a Docker rebuild or restart.
+
+## Rakuten Cash Back monitoring
+
+`cashback.json` is separate because it monitors a percentage rather than a product price.
+
+Current Sporting Life example:
 
 ```json
 [
@@ -30,52 +172,7 @@ Telegram alerts are sent only when a configured threshold is triggered.
 ]
 ```
 
-`comparison: "gt"` means **strictly greater than 10%**. A 10% offer does not trigger; 10.5%, 12%, 15%, etc. do.
-
-## Live configuration
-
-Both configuration files are bind-mounted:
-
-- `products.json`
-- `cashback.json`
-
-You can edit either file while the monitor is running. The changes are loaded on the next check cycle without another rebuild or restart.
-
-## Rakuten alert behavior
-
-For each cashback monitor:
-
-- Crossing from at/below the threshold to above it sends an alert.
-- If Cash Back increases again while already above the threshold, another alert is sent.
-- If Cash Back drops back to/below the threshold, the crossing state resets.
-- `repeat_alert_hours` controls reminder alerts while the deal remains triggered.
-- Set `repeat_alert_hours` to `0` to disable repeat reminders.
-
-Example:
-
-```text
-💰 Rakuten Cash Back Alert
-
-Sporting Life
-Cash Back: 12%
-Threshold: > 10%
-
-https://www.rakuten.ca/sportinglife
-```
-
-## Amazon product example
-
-```json
-[
-  {
-    "id": "finer-form-bench",
-    "name": "Finer Form Multi-Functional Weight Bench",
-    "url": "https://www.amazon.ca/dp/B08YWHN79N",
-    "target_price": 229,
-    "repeat_alert_hours": 24
-  }
-]
-```
+`comparison: "gt"` means strictly greater than 10%.
 
 ## Telegram setup
 
@@ -102,7 +199,7 @@ sudo docker compose run --rm amazon-price-monitor python get_chat_id.py
 
 ## Update the Raspberry Pi
 
-After pulling this code update, rebuild once because `monitor.py` and Docker mounts changed:
+This code change requires one rebuild:
 
 ```bash
 cd ~/amazon_telegram_price_monitor
@@ -114,7 +211,7 @@ sudo docker compose up -d
 sudo docker compose logs -f
 ```
 
-After that, changing only `products.json` or `cashback.json` does not require another rebuild.
+After that, edits to `products.json` or `cashback.json` are live and do not require another rebuild.
 
 ## Time zone
 
