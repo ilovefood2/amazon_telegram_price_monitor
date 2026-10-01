@@ -1,0 +1,10 @@
+[
+  {
+    "id": "sportinglife-rakuten",
+    "name": "Sporting Life",
+    "url": "https://www.rakuten.ca/sportinglife",
+    "threshold_percent": 10,
+    "comparison": "gt",
+    "repeat_alert_hours": 24
+  }
+]
