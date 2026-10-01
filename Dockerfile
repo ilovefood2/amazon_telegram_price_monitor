@@ -15,6 +15,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY monitor.py get_chat_id.py products.json ./
+COPY monitor.py get_chat_id.py products.json cashback.json ./
 
 CMD ["python", "monitor.py"]
