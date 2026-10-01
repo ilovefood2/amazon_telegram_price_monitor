@@ -107,7 +107,7 @@ def normalize_selectors(item):
         selectors.extend(
             str(value).strip()
             for value in multiple
-            if str(value).strip()
+            if value is not None and str(value).strip()
         )
 
     return list(
@@ -371,7 +371,7 @@ def parse_money(text, price_regex=None):
     if text is None:
         return None
 
-    text = str(text).replace(",", "").replace("\\xa0", " ").strip()
+    text = str(text).replace(",", "").replace("\xa0", " ").strip()
     if not text:
         return None
 
@@ -382,7 +382,7 @@ def parse_money(text, price_regex=None):
         text = match.group(1) if match.lastindex else match.group(0)
 
     match = re.search(
-        r"(?:CAD|CDN|C\\$|\\$)?\\s*([0-9]+(?:\\.[0-9]{1,2})?)",
+        r"(?:CAD|CDN|C\$|\$)?\s*([0-9]+(?:\.[0-9]{1,2})?)",
         text,
         re.I,
     )
