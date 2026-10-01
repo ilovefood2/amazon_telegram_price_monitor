@@ -1,0 +1,11 @@
+services:
+  amazon-price-monitor:
+    build: .
+    container_name: amazon-price-monitor
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./products.json:/app/products.json:ro
+    shm_size: "512mb"
