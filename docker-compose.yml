@@ -8,4 +8,5 @@ services:
     volumes:
       - ./data:/data
       - ./products.json:/app/products.json:ro
+      - ./cashback.json:/app/cashback.json:ro
     shm_size: "512mb"
