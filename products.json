@@ -4,8 +4,8 @@
     "name": "Finer Form Multi-Functional Weight Bench",
     "parser": "amazon",
     "url": "https://www.amazon.ca/Finer-Form-Multi-Functional-Weight-Workout-dp-B08YWHN79N/dp/B08YWHN79N/ref=dp_ob_title_sports",
-    "target_price": 229,
+    "target_price": 229.99,
     "currency": "CAD",
-    "repeat_alert_hours": 24
+    "repeat_alert_hours": 0
   }
 ]

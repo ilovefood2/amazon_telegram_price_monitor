@@ -5,6 +5,6 @@
     "url": "https://www.rakuten.ca/sportinglife",
     "threshold_percent": 10,
     "comparison": "gt",
-    "repeat_alert_hours": 24
+    "repeat_alert_hours": 0
   }
 ]
