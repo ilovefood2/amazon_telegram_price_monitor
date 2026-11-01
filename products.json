@@ -1,5 +1,5 @@
 [
- {
+  {
     "id": "Protein-Powder",
     "name": "Protein Powder",
     "parser": "amazon",
@@ -8,7 +8,7 @@
     "currency": "CAD",
     "repeat_alert_hours": 0
   },
- {
+  {
     "id": "rokid-glasses",
     "name": "Rokid Glasses",
     "parser": "amazon",
@@ -16,6 +16,18 @@
     "target_price": 650,
     "currency": "CAD",
     "repeat_alert_hours": 0
+  },
+  {
+    "id": "costco-5339125",
+    "name": "Nordictrack RW300 Rower (Costco)",
+    "parser": "generic",
+    "url": "https://www.costco.ca/p/-/5339125?province=ON&langId=-24&sh=true&nf=true",
+    "target_price": 699.99,
+    "currency": "CAD",
+    "repeat_alert_hours": 0,
+    "price_selector": "script[type='application/ld+json']",
+    "price_attribute": "textContent",
+    "price_regex": "\"sku\"\\s*:\\s*\"5339125\"[\\s\\S]*?\"offers\"\\s*:\\s*\\{[^{}]*\"priceCurrency\"\\s*:\\s*\"CAD\"[^{}]*\"price\"\\s*:\\s*([0-9]+(?:\\.[0-9]{1,2})?)\\s*\\}",
+    "wait_selector": "script[type='application/ld+json']"
   }
-
 ]

@@ -666,6 +666,11 @@ def get_product_price(driver, product):
         )
         return title, price
 
+    if product.get("price_selectors"):
+        raise RuntimeError(
+            "Configured price selector(s) did not produce a valid price."
+        )
+
     if product["parser"] == "amazon":
         try:
             result = WebDriverWait(driver, ELEMENT_WAIT_SECONDS).until(
@@ -703,11 +708,6 @@ def get_product_price(driver, product):
                 raw,
             )
             return title, price
-
-    if product.get("price_selectors"):
-        raise RuntimeError(
-            "Configured price selector(s) did not produce a valid price."
-        )
 
     raise RuntimeError(
         "Could not determine this product's price safely. "

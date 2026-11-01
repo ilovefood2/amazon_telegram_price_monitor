@@ -440,6 +440,9 @@ those selectors are tried first.
 
 This is the highest-confidence method because you explicitly tell the monitor which DOM element contains the price.
 
+When explicit price selectors are configured, they must produce a valid price.
+Otherwise the check fails without falling back to automatic price sources.
+
 ### Step 2 — Amazon parser
 
 If the parser is `amazon`, the monitor tries known Amazon price selectors including:

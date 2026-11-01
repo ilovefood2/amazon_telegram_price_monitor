@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import ExitStack
 from unittest.mock import Mock, patch
@@ -79,6 +80,41 @@ class AmazonPriceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "challenge"):
                 m.get_product_price(browser, PRODUCT)
             configured.assert_not_called()
+
+
+class ConfiguredPriceTests(unittest.TestCase):
+    selector = "script[type='application/ld+json']"
+    pattern = (
+        r'"sku"\s*:\s*"5339125"[\s\S]*?"offers"\s*:\s*\{'
+        r'[^{}]*"priceCurrency"\s*:\s*"CAD"[^{}]*"price"\s*:\s*'
+        r'([0-9]+(?:\.[0-9]{1,2})?)\s*\}'
+    )
+
+    def product(self):
+        return dict(PRODUCT, parser="generic", target_price=699.99,
+                    price_selectors=[self.selector], price_regex=self.pattern)
+
+    def page(self, sku="5339125", currency="CAD", price=799.99):
+        data = {"@type": "Product", "sku": sku,
+                "offers": {"priceCurrency": currency, "price": price}}
+        return driver({self.selector: [element(json.dumps(data))]})
+
+    def test_costco_matches_the_requested_product_and_currency(self):
+        with patch.object(m, "wait_for_product_page"):
+            self.assertEqual(m.get_product_price(self.page(), self.product())[1], 799.99)
+
+    def test_invalid_costco_data_cannot_fall_back_to_another_price(self):
+        for kwargs in [{"sku": "other-item"}, {"currency": "USD"}, {"price": 0}]:
+            with self.subTest(kwargs=kwargs), \
+                 patch.object(m, "wait_for_product_page"), \
+                 patch.object(m, "extract_jsonld_product_price", return_value=(40, "other", "40")) as automatic:
+                with self.assertRaisesRegex(RuntimeError, "Configured price selector"):
+                    m.get_product_price(self.page(**kwargs), self.product())
+                automatic.assert_not_called()
+
+    def test_costco_requires_a_price_strictly_below_700(self):
+        self.assertFalse(m.should_alert({}, 700, 699.99, 0))
+        self.assertTrue(m.should_alert({}, 699.99, 699.99, 0))
 
 
 class MonitorLoopTests(unittest.TestCase):
