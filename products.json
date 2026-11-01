@@ -29,5 +29,18 @@
     "price_attribute": "textContent",
     "price_regex": "\"sku\"\\s*:\\s*\"5339125\"[\\s\\S]*?\"offers\"\\s*:\\s*\\{[^{}]*\"priceCurrency\"\\s*:\\s*\"CAD\"[^{}]*\"price\"\\s*:\\s*([0-9]+(?:\\.[0-9]{1,2})?)\\s*\\}",
     "wait_selector": "script[type='application/ld+json']"
+  },
+  {
+    "id": "costco-4000306314",
+    "name": "adidas Performance Adjustable Weight Vest (Costco)",
+    "parser": "generic",
+    "url": "https://www.costco.ca/.product.4000306314.html",
+    "target_price": 199.98,
+    "currency": "CAD",
+    "repeat_alert_hours": 0,
+    "price_selector": "script[type='application/ld+json']",
+    "price_attribute": "textContent",
+    "price_regex": "\"sku\"\\s*:\\s*\"1873484\"[\\s\\S]*?\"offers\"\\s*:\\s*\\{[^{}]*\"priceCurrency\"\\s*:\\s*\"CAD\"[^{}]*\"price\"\\s*:\\s*([0-9]+(?:\\.[0-9]{1,2})?)\\s*\\}",
+    "wait_selector": "script[type='application/ld+json']"
   }
 ]
