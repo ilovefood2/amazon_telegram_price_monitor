@@ -16,7 +16,7 @@ The project started as an Amazon price watcher, so the repository/container name
 ## Table of contents
 
 - [What it does](#what-it-does)
-- [Current included monitors](#current-included-monitors)
+- [Configuration examples](#configuration-examples)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
@@ -94,13 +94,14 @@ Instead, it uses structured product data, known site-specific selectors, or an e
 
 ---
 
-# Current included monitors
+# Configuration examples
 
-The repository currently includes these example/active configurations.
+The examples below illustrate the configuration format. Check your actual
+`products.json` and `cashback.json` for the active products and thresholds.
 
 ## Product price
 
-`products.json` contains the Finer Form bench:
+For example, a Finer Form bench entry in `products.json`:
 
 ```json
 [
@@ -124,7 +125,7 @@ current price <= C$229
 
 ## Rakuten Cash Back
 
-`cashback.json` contains Sporting Life:
+For example, a Sporting Life entry in `cashback.json`:
 
 ```json
 [
@@ -444,14 +445,18 @@ This is the highest-confidence method because you explicitly tell the monitor wh
 If the parser is `amazon`, the monitor tries known Amazon price selectors including:
 
 ```text
-#corePrice_feature_div .a-price .a-offscreen
-#corePriceDisplay_desktop_feature_div .a-price .a-offscreen
+#corePrice_feature_div .a-price.apex-pricetopay-value
+#corePriceDisplay_desktop_feature_div .a-price.apex-pricetopay-value
+#corePriceDisplay_desktop_feature_div .a-price.priceToPay
 #price_inside_buybox
-#priceblock_ourprice
 #priceblock_dealprice
-.apexPriceToPay .a-offscreen
-span.a-price span.a-offscreen
+#priceblock_ourprice
 ```
+
+Only visible main-offer containers are accepted; struck-through prices are excluded.
+The parser reads whole/fraction price nodes when the accessibility price is blank.
+It waits for a valid offer price and stops with an error if none is found.
+Amazon pages never fall back to whole-page prices or generic product metadata.
 
 ### Step 3 — JSON-LD Product data
 
@@ -1008,6 +1013,10 @@ without rebuilding the image.
 
 The next monitoring cycle reloads both files.
 
+The files load independently: a product configuration error skips product checks for
+that cycle, while a cashback configuration error skips cashback checks. The other
+type of monitor continues. Errors are logged and the files are retried next cycle.
+
 Example:
 
 ```bash
@@ -1060,6 +1069,9 @@ C$225.00 → ALERT again
 Without state, a five-minute monitor would send an alert every five minutes for the entire duration of a sale.
 
 The state system prevents that.
+
+Crossing state advances only after a required Telegram alert succeeds, so a failed
+delivery is retried next cycle while the threshold condition still holds.
 
 ---
 
@@ -1339,6 +1351,16 @@ Simplify them when possible.
 ---
 
 # Validation commands
+
+## Run regression tests
+
+With the project's Python dependencies installed:
+
+```bash
+python -m unittest -v test_monitor
+```
+
+The tests use simulated pages and Telegram responses; they send no messages.
 
 ## Check JSON syntax
 

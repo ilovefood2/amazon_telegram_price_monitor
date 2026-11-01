@@ -1,11 +1,21 @@
 [
-  {
-    "id": "finer-form-bench",
-    "name": "Finer Form Multi-Functional Weight Bench",
+ {
+    "id": "Protein-Powder",
+    "name": "Protein Powder",
     "parser": "amazon",
-    "url": "https://www.amazon.ca/Finer-Form-Multi-Functional-Weight-Workout-dp-B08YWHN79N/dp/B08YWHN79N/ref=dp_ob_title_sports",
-    "target_price": 229.99,
+    "url": "https://www.amazon.ca/gp/product/B00G6QHYZ6/ref=ox_sc_act_image_1?smid=A2X2L3NLC8WXPZ&psc=1",
+    "target_price": 180,
+    "currency": "CAD",
+    "repeat_alert_hours": 0
+  },
+ {
+    "id": "rokid-glasses",
+    "name": "Rokid Glasses",
+    "parser": "amazon",
+    "url": "https://www.amazon.ca/gp/product/B0H7B73XCS/ref=ox_sc_act_title_1?smid=ADQ8PPI9HA4SX&th=1",
+    "target_price": 650,
     "currency": "CAD",
     "repeat_alert_hours": 0
   }
+
 ]

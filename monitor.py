@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import requests
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -351,7 +352,9 @@ def build_driver():
     )
 
     service = Service(executable_path=CHROMEDRIVER_BINARY)
-    return webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.set_page_load_timeout(45)
+    return driver
 
 
 def read_element_value(element, attribute):
@@ -578,14 +581,13 @@ def extract_standard_product_metadata(driver):
 
 def extract_amazon_price(driver):
     selectors = [
-        "#corePrice_feature_div .a-price .a-offscreen",
+        "#corePrice_feature_div .a-price.apex-pricetopay-value",
         "#corePriceDisplay_desktop_feature_div "
-        ".a-price .a-offscreen",
+        ".a-price.apex-pricetopay-value",
+        "#corePriceDisplay_desktop_feature_div .a-price.priceToPay",
         "#price_inside_buybox",
-        "#priceblock_ourprice",
         "#priceblock_dealprice",
-        ".apexPriceToPay .a-offscreen",
-        "span.a-price span.a-offscreen",
+        "#priceblock_ourprice",
     ]
 
     for selector in selectors:
@@ -594,8 +596,40 @@ def extract_amazon_price(driver):
                 By.CSS_SELECTOR,
                 selector,
             ):
-                raw = read_element_value(element, "text")
-                price = parse_money(raw)
+                if (
+                    not element.is_displayed()
+                    or "a-text-price" in (element.get_attribute("class") or "").split()
+                    or element.get_attribute("data-a-strike") == "true"
+                ):
+                    continue
+
+                whole = element.find_elements(By.CSS_SELECTOR, ".a-price-whole")
+                fraction = element.find_elements(
+                    By.CSS_SELECTOR, ".a-price-fraction"
+                )
+                if whole and fraction:
+                    dollars = re.sub(
+                        r"[\s,.]", "", read_element_value(whole[0], "text")
+                    )
+                    cents = read_element_value(fraction[0], "text")
+                    if not (
+                        re.fullmatch(r"[0-9]+", dollars)
+                        and re.fullmatch(r"[0-9]{2}", cents)
+                    ):
+                        continue
+                    raw = f"{dollars}.{cents}"
+                else:
+                    offscreen = element.find_elements(
+                        By.CSS_SELECTOR, ".a-offscreen"
+                    )
+                    raw = read_element_value(
+                        offscreen[0] if offscreen else element, "text"
+                    )
+
+                price = parse_money(
+                    raw,
+                    r"^(?:(?:CAD|CDN)\s*)?(?:C?\$)?\s*([0-9]+(?:\.[0-9]{1,2})?)$",
+                )
                 if price is not None and 0.01 <= price <= 1000000:
                     return (
                         price,
@@ -612,6 +646,14 @@ def get_product_price(driver, product):
     wait_for_product_page(driver, product)
     title = get_page_title(driver, product)
 
+    if product["parser"] == "amazon":
+        source = driver.page_source.lower()
+        if (
+            "enter the characters you see below" in source
+            or "sorry, we just need to make sure" in source
+        ):
+            raise RuntimeError("Amazon returned a bot/challenge page.")
+
     result = extract_from_configured_selectors(driver, product)
     if result:
         price, source, raw = result
@@ -625,7 +667,14 @@ def get_product_price(driver, product):
         return title, price
 
     if product["parser"] == "amazon":
-        result = extract_amazon_price(driver)
+        try:
+            result = WebDriverWait(driver, ELEMENT_WAIT_SECONDS).until(
+                extract_amazon_price
+            )
+        except TimeoutException as exc:
+            raise RuntimeError(
+                "Could not determine the current Amazon offer price safely."
+            ) from exc
         if result:
             price, source, raw = result
             log.info(
@@ -636,6 +685,8 @@ def get_product_price(driver, product):
                 raw,
             )
             return title, price
+
+        raise RuntimeError("Could not determine the current Amazon offer price safely.")
 
     for extractor in (
         extract_jsonld_product_price,
@@ -652,16 +703,6 @@ def get_product_price(driver, product):
                 raw,
             )
             return title, price
-
-    if product["parser"] == "amazon":
-        source = driver.page_source.lower()
-        if (
-            "enter the characters you see below" in source
-            or "sorry, we just need to make sure" in source
-        ):
-            raise RuntimeError(
-                "Amazon returned a bot/challenge page."
-            )
 
     if product.get("price_selectors"):
         raise RuntimeError(
@@ -861,8 +902,17 @@ def run():
         driver = None
 
         try:
-            products = load_products()
-            cashback_monitors = load_cashback_monitors()
+            try:
+                products = load_products()
+            except Exception as exc:
+                log.exception("Product configuration failed: %s", exc)
+                products = []
+
+            try:
+                cashback_monitors = load_cashback_monitors()
+            except Exception as exc:
+                log.exception("Cashback configuration failed: %s", exc)
+                cashback_monitors = []
 
             signature = json.dumps(
                 {
@@ -956,9 +1006,6 @@ def run():
                             "target_price": product["target_price"],
                             "currency": product["currency"],
                             "parser": product["parser"],
-                            "below_target": (
-                                price <= product["target_price"]
-                            ),
                         }
                     )
 
@@ -979,6 +1026,10 @@ def run():
                             product["key"],
                         )
 
+                    # Advance crossing state only after any required alert succeeds.
+                    item_state["below_target"] = price <= product["target_price"]
+                    item_state.pop("last_error", None)
+                    item_state.pop("last_error_at", None)
                     save_state(state)
 
                 except Exception as exc:
@@ -1039,7 +1090,6 @@ def run():
                                 cashback["threshold_percent"]
                             ),
                             "comparison": cashback["comparison"],
-                            "above_threshold": triggered,
                         }
                     )
 
@@ -1060,6 +1110,9 @@ def run():
                             cashback["key"],
                         )
 
+                    item_state["above_threshold"] = triggered
+                    item_state.pop("last_error", None)
+                    item_state.pop("last_error_at", None)
                     save_state(state)
 
                 except Exception as exc:

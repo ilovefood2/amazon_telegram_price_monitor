@@ -6,5 +6,13 @@
     "threshold_percent": 10,
     "comparison": "gt",
     "repeat_alert_hours": 0
+  },
+  {
+    "id": "sail-rakuten",
+    "name": "Sail",
+    "url": "https://www.rakuten.ca/sail",
+    "threshold_percent": 10,
+    "comparison": "gt",
+    "repeat_alert_hours": 0
   }
 ]
